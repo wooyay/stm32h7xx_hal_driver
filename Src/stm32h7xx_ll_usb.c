@@ -329,6 +329,9 @@ HAL_StatusTypeDef USB_DevInit(USB_OTG_GlobalTypeDef *USBx, USB_OTG_CfgTypeDef cf
   /* Restart the Phy Clock */
   USBx_PCGCCTL = 0U;
 
+  /* Device mode configuration */
+  USBx_DEVICE->DCFG |= DCFG_FRAME_INTERVAL_80;
+
   if (cfg.phy_itface == USB_OTG_ULPI_PHY)
   {
     if (cfg.speed == USBD_HS_SPEED)
@@ -1199,7 +1202,7 @@ HAL_StatusTypeDef USB_DevDisconnect(USB_OTG_GlobalTypeDef *USBx)
   * @param  USBx  Selected device
   * @retval USB Global Interrupt status
   */
-uint32_t USB_ReadInterrupts(USB_OTG_GlobalTypeDef *USBx)
+uint32_t USB_ReadInterrupts(USB_OTG_GlobalTypeDef const *USBx)
 {
   uint32_t tmpreg;
 
@@ -1607,7 +1610,7 @@ HAL_StatusTypeDef USB_DriveVbus(USB_OTG_GlobalTypeDef *USBx, uint8_t state)
   *            @arg HCD_SPEED_FULL: Full speed mode
   *            @arg HCD_SPEED_LOW: Low speed mode
   */
-uint32_t USB_GetHostSpeed(USB_OTG_GlobalTypeDef *USBx)
+uint32_t USB_GetHostSpeed(USB_OTG_GlobalTypeDef const *USBx)
 {
   uint32_t USBx_BASE = (uint32_t)USBx;
   __IO uint32_t hprt0 = 0U;
@@ -1621,7 +1624,7 @@ uint32_t USB_GetHostSpeed(USB_OTG_GlobalTypeDef *USBx)
   * @param  USBx  Selected device
   * @retval current frame number
   */
-uint32_t USB_GetCurrentFrame(USB_OTG_GlobalTypeDef *USBx)
+uint32_t USB_GetCurrentFrame(USB_OTG_GlobalTypeDef const *USBx)
 {
   uint32_t USBx_BASE = (uint32_t)USBx;
 
@@ -1724,6 +1727,9 @@ HAL_StatusTypeDef USB_HC_Init(USB_OTG_GlobalTypeDef *USBx, uint8_t ch_num,
       break;
   }
 
+  /* Clear Hub Start Split transaction */
+  USBx_HC((uint32_t)ch_num)->HCSPLT = 0U;
+
   /* Enable host channel Halt interrupt */
   USBx_HC((uint32_t)ch_num)->HCINTMSK |= USB_OTG_HCINTMSK_CHHM;
 
@@ -1789,51 +1795,114 @@ HAL_StatusTypeDef USB_HC_StartXfer(USB_OTG_GlobalTypeDef *USBx, USB_OTG_HCTypeDe
   uint16_t num_packets;
   uint16_t max_hc_pkt_count = HC_MAX_PKT_CNT;
 
-  if (((USBx->CID & (0x1U << 8)) != 0U) && (hc->speed == USBH_HS_SPEED))
+  if ((USBx->CID & (0x1U << 8)) != 0U)
   {
-    /* in DMA mode host Core automatically issues ping  in case of NYET/NAK */
-    if ((dma == 1U) && ((hc->ep_type == EP_TYPE_CTRL) || (hc->ep_type == EP_TYPE_BULK)))
+    /* in DMA mode host Core automatically issues ping in case of NYET/NAK */
+    if (dma == 1U)
     {
-      USBx_HC((uint32_t)ch_num)->HCINTMSK &= ~(USB_OTG_HCINTMSK_NYET |
-                                               USB_OTG_HCINTMSK_ACKM |
-                                               USB_OTG_HCINTMSK_NAKM);
-    }
+      if ((hc->ep_type == EP_TYPE_CTRL) || (hc->ep_type == EP_TYPE_BULK))
+      {
 
-    if ((dma == 0U) && (hc->do_ping == 1U))
+        USBx_HC((uint32_t)ch_num)->HCINTMSK &= ~(USB_OTG_HCINTMSK_NYET |
+                                                 USB_OTG_HCINTMSK_ACKM |
+                                                 USB_OTG_HCINTMSK_NAKM);
+      }
+    }
+    else
     {
-      (void)USB_DoPing(USBx, hc->ch_num);
-      return HAL_OK;
+      if ((hc->speed == USBH_HS_SPEED) && (hc->do_ping == 1U))
+      {
+        (void)USB_DoPing(USBx, hc->ch_num);
+        return HAL_OK;
+      }
     }
-
   }
 
-  /* Compute the expected number of packets associated to the transfer */
-  if (hc->xfer_len > 0U)
+  if (hc->do_ssplit == 1U)
   {
-    num_packets = (uint16_t)((hc->xfer_len + hc->max_packet - 1U) / hc->max_packet);
+    /* Set number of packet to 1 for Split transaction */
+    num_packets = 1U;
 
-    if (num_packets > max_hc_pkt_count)
+    if (hc->ep_is_in != 0U)
     {
-      num_packets = max_hc_pkt_count;
       hc->XferSize = (uint32_t)num_packets * hc->max_packet;
     }
-  }
-  else
-  {
-    num_packets = 1U;
-  }
+    else
+    {
+      if (hc->ep_type == EP_TYPE_ISOC)
+      {
+        if (hc->xfer_len > ISO_SPLT_MPS)
+        {
+          /* Isochrone Max Packet Size for Split mode */
+          hc->XferSize = hc->max_packet;
+          hc->xfer_len = hc->XferSize;
 
-  /*
-   * For IN channel HCTSIZ.XferSize is expected to be an integer multiple of
-   * max_packet size.
-   */
-  if (hc->ep_is_in != 0U)
-  {
-    hc->XferSize = (uint32_t)num_packets * hc->max_packet;
+          if ((hc->iso_splt_xactPos == HCSPLT_BEGIN) || (hc->iso_splt_xactPos == HCSPLT_MIDDLE))
+          {
+            hc->iso_splt_xactPos = HCSPLT_MIDDLE;
+          }
+          else
+          {
+            hc->iso_splt_xactPos = HCSPLT_BEGIN;
+          }
+        }
+        else
+        {
+          hc->XferSize = hc->xfer_len;
+
+          if ((hc->iso_splt_xactPos != HCSPLT_BEGIN) && (hc->iso_splt_xactPos != HCSPLT_MIDDLE))
+          {
+            hc->iso_splt_xactPos = HCSPLT_FULL;
+          }
+          else
+          {
+            hc->iso_splt_xactPos = HCSPLT_END;
+          }
+        }
+      }
+      else
+      {
+        if ((dma == 1U) && (hc->xfer_len > hc->max_packet))
+        {
+          hc->XferSize = (uint32_t)num_packets * hc->max_packet;
+        }
+        else
+        {
+          hc->XferSize = hc->xfer_len;
+        }
+      }
+    }
   }
   else
   {
-    hc->XferSize = hc->xfer_len;
+    /* Compute the expected number of packets associated to the transfer */
+    if (hc->xfer_len > 0U)
+    {
+      num_packets = (uint16_t)((hc->xfer_len + hc->max_packet - 1U) / hc->max_packet);
+
+      if (num_packets > max_hc_pkt_count)
+      {
+        num_packets = max_hc_pkt_count;
+        hc->XferSize = (uint32_t)num_packets * hc->max_packet;
+      }
+    }
+    else
+    {
+      num_packets = 1U;
+    }
+
+    /*
+    * For IN channel HCTSIZ.XferSize is expected to be an integer multiple of
+    * max_packet size.
+    */
+    if (hc->ep_is_in != 0U)
+    {
+      hc->XferSize = (uint32_t)num_packets * hc->max_packet;
+    }
+    else
+    {
+      hc->XferSize = hc->xfer_len;
+    }
   }
 
   /* Initialize the HCTSIZn register */
@@ -1850,6 +1919,65 @@ HAL_StatusTypeDef USB_HC_StartXfer(USB_OTG_GlobalTypeDef *USBx, USB_OTG_HCTypeDe
   is_oddframe = (((uint32_t)USBx_HOST->HFNUM & 0x01U) != 0U) ? 0U : 1U;
   USBx_HC(ch_num)->HCCHAR &= ~USB_OTG_HCCHAR_ODDFRM;
   USBx_HC(ch_num)->HCCHAR |= (uint32_t)is_oddframe << 29;
+
+  if (hc->do_ssplit == 1U)
+  {
+    /* Set Hub start Split transaction */
+    USBx_HC((uint32_t)ch_num)->HCSPLT = ((uint32_t)hc->hub_addr << USB_OTG_HCSPLT_HUBADDR_Pos) |
+                                        (uint32_t)hc->hub_port_nbr | USB_OTG_HCSPLT_SPLITEN;
+
+    /* unmask ack & nyet for IN/OUT transactions */
+    USBx_HC((uint32_t)ch_num)->HCINTMSK |= (USB_OTG_HCINTMSK_ACKM |
+                                            USB_OTG_HCINTMSK_NYET);
+
+    if ((hc->do_csplit == 1U) && (hc->ep_is_in == 0U))
+    {
+      USBx_HC((uint32_t)ch_num)->HCSPLT |= USB_OTG_HCSPLT_COMPLSPLT;
+      USBx_HC((uint32_t)ch_num)->HCINTMSK |= USB_OTG_HCINTMSK_NYET;
+    }
+
+    if (((hc->ep_type == EP_TYPE_ISOC) || (hc->ep_type == EP_TYPE_INTR)) &&
+        (hc->do_csplit == 1U) && (hc->ep_is_in == 1U))
+    {
+      USBx_HC((uint32_t)ch_num)->HCSPLT |= USB_OTG_HCSPLT_COMPLSPLT;
+    }
+
+    /* Position management for iso out transaction on split mode */
+    if ((hc->ep_type == EP_TYPE_ISOC) && (hc->ep_is_in == 0U))
+    {
+      /* Set data payload position */
+      switch (hc->iso_splt_xactPos)
+      {
+        case HCSPLT_BEGIN:
+          /* First data payload for OUT Transaction */
+          USBx_HC((uint32_t)ch_num)->HCSPLT |= USB_OTG_HCSPLT_XACTPOS_1;
+          break;
+
+        case HCSPLT_MIDDLE:
+          /* Middle data payload for OUT Transaction */
+          USBx_HC((uint32_t)ch_num)->HCSPLT |= USB_OTG_HCSPLT_XACTPOS_Pos;
+          break;
+
+        case HCSPLT_END:
+          /* End data payload for OUT Transaction */
+          USBx_HC((uint32_t)ch_num)->HCSPLT |= USB_OTG_HCSPLT_XACTPOS_0;
+          break;
+
+        case HCSPLT_FULL:
+          /* Entire data payload for OUT Transaction */
+          USBx_HC((uint32_t)ch_num)->HCSPLT |= USB_OTG_HCSPLT_XACTPOS;
+          break;
+
+        default:
+          break;
+      }
+    }
+  }
+  else
+  {
+    /* Clear Hub Start Split transaction */
+    USBx_HC((uint32_t)ch_num)->HCSPLT = 0U;
+  }
 
   /* Set host channel enable */
   tmpreg = USBx_HC(ch_num)->HCCHAR;
@@ -1872,7 +2000,7 @@ HAL_StatusTypeDef USB_HC_StartXfer(USB_OTG_GlobalTypeDef *USBx, USB_OTG_HCTypeDe
     return HAL_OK;
   }
 
-  if ((hc->ep_is_in == 0U) && (hc->xfer_len > 0U))
+  if ((hc->ep_is_in == 0U) && (hc->xfer_len > 0U) && (hc->do_csplit == 0U))
   {
     switch (hc->ep_type)
     {
@@ -1939,9 +2067,14 @@ HAL_StatusTypeDef USB_HC_Halt(USB_OTG_GlobalTypeDef *USBx, uint8_t hc_num)
   __IO uint32_t count = 0U;
   uint32_t HcEpType = (USBx_HC(hcnum)->HCCHAR & USB_OTG_HCCHAR_EPTYP) >> 18;
   uint32_t ChannelEna = (USBx_HC(hcnum)->HCCHAR & USB_OTG_HCCHAR_CHENA) >> 31;
+  uint32_t SplitEna = (USBx_HC(hcnum)->HCSPLT & USB_OTG_HCSPLT_SPLITEN) >> 31;
 
-  if (((USBx->GAHBCFG & USB_OTG_GAHBCFG_DMAEN) == USB_OTG_GAHBCFG_DMAEN) &&
-      (ChannelEna == 0U))
+  /* In buffer DMA, Channel disable must not be programmed for non-split periodic channels.
+     At the end of the next uframe/frame (in the worst case), the core generates a channel halted
+     and disables the channel automatically. */
+
+  if ((((USBx->GAHBCFG & USB_OTG_GAHBCFG_DMAEN) == USB_OTG_GAHBCFG_DMAEN) && (SplitEna == 0U)) &&
+      ((ChannelEna == 0U) || (((HcEpType == HCCHAR_ISOC) || (HcEpType == HCCHAR_INTR)))))
   {
     return HAL_OK;
   }

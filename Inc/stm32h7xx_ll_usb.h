@@ -179,6 +179,13 @@ typedef struct
                                                                              (HCD_DEVICE_SPEED_xxx)             */
 
   uint8_t   do_ping;            /*!< Enable or disable the use of the PING protocol for HS mode.                */
+  uint8_t   do_ssplit;          /*!< Enable start split transaction in HS mode.                                 */
+  uint8_t   do_csplit;          /*!< Enable complete split transaction in HS mode.                              */
+  uint8_t   ep_ss_schedule;     /*!< Enable periodic endpoint start split schedule.                             */
+  uint8_t   iso_splt_xactPos;   /*!< iso split transfer transaction position.                                   */
+
+  uint8_t   hub_port_nbr;       /*!< USB HUB port number                                                        */
+  uint8_t   hub_addr;           /*!< USB HUB address                                                            */
 
   uint8_t   process_ping;       /*!< Execute the PING protocol for HS mode.                                     */
 
@@ -208,6 +215,7 @@ typedef struct
   uint32_t  dma_addr;           /*!< 32 bits aligned transfer buffer address.                                   */
 
   uint32_t  ErrCnt;             /*!< Host channel error count.                                                  */
+  uint32_t  NyetErrCnt;         /*!< Complete Split NYET Host channel error count.                              */
 
   USB_URBStateTypeDef urb_state;  /*!< URB state.
                                        This parameter can be any value of @ref USB_URBStateTypeDef              */
@@ -425,6 +433,12 @@ typedef USB_HCTypeDef       USB_OTG_HCTypeDef;
 #define CLEAR_INTERRUPT_MASK          0xFFFFFFFFU
 
 #define HC_MAX_PKT_CNT                       256U
+#define ISO_SPLT_MPS                         188U
+
+#define HCSPLT_BEGIN                           1U
+#define HCSPLT_MIDDLE                          2U
+#define HCSPLT_END                             3U
+#define HCSPLT_FULL                            4U
 
 #define TEST_J                                 1U
 #define TEST_K                                 2U
@@ -505,7 +519,7 @@ HAL_StatusTypeDef USB_ActivateSetup(USB_OTG_GlobalTypeDef *USBx);
 HAL_StatusTypeDef USB_EP0_OutStart(USB_OTG_GlobalTypeDef *USBx, uint8_t dma, uint8_t *psetup);
 uint8_t           USB_GetDevSpeed(USB_OTG_GlobalTypeDef *USBx);
 uint32_t          USB_GetMode(USB_OTG_GlobalTypeDef *USBx);
-uint32_t          USB_ReadInterrupts(USB_OTG_GlobalTypeDef *USBx);
+uint32_t          USB_ReadInterrupts(USB_OTG_GlobalTypeDef const *USBx);
 uint32_t          USB_ReadChInterrupts(USB_OTG_GlobalTypeDef *USBx, uint8_t chnum);
 uint32_t          USB_ReadDevAllOutEpInterrupt(USB_OTG_GlobalTypeDef *USBx);
 uint32_t          USB_ReadDevOutEPInterrupt(USB_OTG_GlobalTypeDef *USBx, uint8_t epnum);
@@ -517,8 +531,8 @@ HAL_StatusTypeDef USB_HostInit(USB_OTG_GlobalTypeDef *USBx, USB_OTG_CfgTypeDef c
 HAL_StatusTypeDef USB_InitFSLSPClkSel(USB_OTG_GlobalTypeDef *USBx, uint8_t freq);
 HAL_StatusTypeDef USB_ResetPort(USB_OTG_GlobalTypeDef *USBx);
 HAL_StatusTypeDef USB_DriveVbus(USB_OTG_GlobalTypeDef *USBx, uint8_t state);
-uint32_t          USB_GetHostSpeed(USB_OTG_GlobalTypeDef *USBx);
-uint32_t          USB_GetCurrentFrame(USB_OTG_GlobalTypeDef *USBx);
+uint32_t          USB_GetHostSpeed(USB_OTG_GlobalTypeDef const *USBx);
+uint32_t          USB_GetCurrentFrame(USB_OTG_GlobalTypeDef const *USBx);
 HAL_StatusTypeDef USB_HC_Init(USB_OTG_GlobalTypeDef *USBx, uint8_t ch_num,
                               uint8_t epnum, uint8_t dev_address, uint8_t speed,
                               uint8_t ep_type, uint16_t mps);
